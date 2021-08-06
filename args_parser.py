@@ -5,6 +5,10 @@ import argparse
 def get_parser():
     parser = argparse.ArgumentParser()
     
+    parser.add_argument('-data_file', '--data_file',
+                        type = str,
+                        default = '/data/ml2/datasets/tabulamuris/tabula-muris-senis-facs_mars.h5ad',
+                        help='location of source h5ad dataset')
     parser.add_argument('-pretrain_batch', '--pretrain_batch',
                         type=int,
                         help='Batch size for pretraining. Default: no batch',

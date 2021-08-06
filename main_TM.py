@@ -22,10 +22,10 @@ def init_seed(opt):
     torch.cuda.manual_seed(opt.manual_seed)
     
     
-def init_dataset():
+def init_dataset(data_file):
     """Init dataset"""
 
-    test_maca = MacaData('tabula-muris-senis-facs-official-annotations.h5ad', annotation_type='cell_ontology_class_reannotated')
+    test_maca = MacaData(data_file, annotation_type='cell_ontology_class_reannotated')
     
     print(test_maca.adata)
     test_maca.adata = test_maca.preprocess_data(test_maca.adata)
@@ -62,7 +62,7 @@ def main():
     params.device = device
 
     init_seed(params)
-    test_data, pretrain_data, cell_type_name_map = init_dataset()
+    test_data, pretrain_data, cell_type_name_map = init_dataset(params.data_file)
     
     
     avg_score_direct = np.zeros((len(test_data), 5))
