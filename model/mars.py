@@ -7,6 +7,7 @@ Implementation of MARS model.
 import torch
 import pandas as pd
 import numpy as np
+import os
 import anndata
 from scipy.spatial import distance
 import scanpy.api as sc
@@ -54,7 +55,9 @@ class MARS:
         self.epochs = params.epochs
         self.epochs_pretrain = params.epochs_pretrain
         self.pretrain_flag = params.pretrain
-        self.model_file = params.model_file
+        self.experiment_dir = params.experiment_dir
+        if(not os.path.exists(self.experiment_dir)):
+            os.mkdir(self.experiment_dir)
         self.lr = params.learning_rate
         self.lr_gamma = params.lr_scheduler_gamma
         self.step_size = params.lr_scheduler_step
@@ -141,7 +144,7 @@ class MARS:
                     print('Saving model...')
                     best_acc = acc_val
                     best_state = self.model.state_dict()
-                    #torch.save(model.state_dict(), self.model_file)
+                    torch.save(model.state_dict(), os.path.join(self.experiment_dir,'source.pt'))
                 postfix = ' (Best)' if acc_val >= best_acc else ' (Best: {})'.format(best_acc)
                 print('Val loss: {}, acc: {}{}'.format(loss_val, acc_val, postfix))
             lr_scheduler.step()
@@ -184,7 +187,7 @@ class MARS:
 
             
         adata.obsm['MARS_embedding'] = np.concatenate([a.uns['MARS_embedding'] for a in adata_all])
-        #adata.write('result_adata.h5ad')
+        adata.write(os.path.join(self.experiment_dir,'result_adata.h5ad'))
         
         return adata
     

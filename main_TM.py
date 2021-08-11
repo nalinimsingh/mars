@@ -82,7 +82,9 @@ def main():
         adata, landmarks, scores = mars.train(evaluation_mode=True)
         mars.name_cell_types(adata, landmarks, cell_type_name_map)
         
-        #adata.write(params.MODEL_DIR+tissue+'/'+tissue+'.h5ad')
+        
+        tissue = unlabeled_data.metadata
+        adata.write(params.MODEL_DIR+tissue+'/'+tissue+'.h5ad')
         
         avg_score_direct[idx,0] = scores['accuracy']
         avg_score_direct[idx,1] = scores['f1_score']

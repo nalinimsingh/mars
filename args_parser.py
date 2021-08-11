@@ -29,11 +29,11 @@ def get_parser():
                         help='number of epochs to pretrain for',
                         default=25)
 
-    parser.add_argument('-source_file','--model_file',
+    parser.add_argument('-experiment_dir','--experiment_dir',
                         type = str,
-                        default = 'trained_models/source.pt',
+                        default = 'example_exp',
                         help='location for storing source model and data')
-
+    
     parser.add_argument('-lr', '--learning_rate',
                         type=float,
                         help='learning rate for the model, default=0.001',
