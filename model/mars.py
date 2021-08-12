@@ -23,7 +23,7 @@ from model.metrics import compute_scores
 class MARS:
 
     def __init__(self, n_clusters, params, labeled_data, unlabeled_data, pretrain_data=None,
-                 val_split=1.0, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=0.8, tau=0.2):
+                 val_split=1.0, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=0.4, tau=0.2):
         """Initialization of MARS.
         n_clusters: number of clusters in the unlabeled meta-dataset
         params: parameters of the MARS model
@@ -313,11 +313,12 @@ class MARS:
         for task in task_idx:
             task = int(task)
             x, y, _ = next(tr_iter[task])
-            x_augment = self.augment()
+            x_augment = self.augment(x)
             x, y, x_augment = x.to(self.device), y.to(self.device), x_augment.to(self.device)
             encoded,_ = self.model(x)
             encoded_augment,_ = self.model(x_augment)
-            loss, acc = loss_task(encoded, landmk_tr[task], y, criterion='dist', encoded_augment)
+            loss, acc = loss_task(encoded, landmk_tr[task], y, criterion='dist',
+                    encoded_augment=encoded_augment, device=self.device)
             total_loss += loss
             total_accuracy += acc.item()
             ntasks += 1

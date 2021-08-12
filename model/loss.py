@@ -1,43 +1,63 @@
 # coding=utf-8
+import numpy as np
+
 import torch
 from torch.nn import functional as F
 
-#from model.utils import euclidean_dist
+from model.utils import euclidean_dist
 
 
-def contrastive_loss(encoded, encoded_aug, temp=0.07):
+def contrastive_loss(encoded, encoded_aug, device=None, temp=0.07, n_sample=100):
+    """Compute contrastive loss.
+
+    Based heavily on https://github.com/sthalles/SimCLR.
+
+    encoded: encoded batch
+    encoded_aug: ancoded batch of augmented data
+    device: GPU on which to perform the computation
+    temp: Temperature parameter for SimCLR loss
+    n_sample: Number of samples over which to compute the loss"""
+    
     assert(encoded.size()==encoded_aug.size())
+    
+    # Randomly select n_sample examples for the contrastive loss
+    # Keeps memory footprint of similarity_matrix manageable
+    inds = np.random.choice(encoded.size()[0], n_sample, replace=False)
+    
+    encoded_norm = F.normalize(encoded, p=2, dim=1)[inds,:]
+    encoded_aug_norm = F.normalize(encoded_aug, p=2, dim=1)[inds,:]
 
-    cl_total = 0
-    encoded_norm = F.normalize(encoded, p=2, dim = 1)
-    encoded_aug_norm = F.normalize(encoded_aug, p=2, dim=1)
+    features = torch.cat([encoded_norm, encoded_aug_norm], dim=0)
+    batch_size = features.size()[0]//2
+    
+    labels = torch.cat([torch.arange(batch_size) for i in range(2)], dim=0)
+    labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
+    labels = labels.to(device)
 
-    aug_batch = torch.cat([encoded_norm, encoded_aug_norm], dim=0)
-    n = aug_batch.size()[0]
+    similarity_matrix = torch.matmul(features, features.T)
 
-    for i in range(n):
-        # Get the index of the pair
-        j = (i+(n//2)) % n 
+    # Discard the main diagonal from both: labels and similarities matrix
+    mask = torch.eye(labels.shape[0]).to(device)
+    mask = mask>0
+    labels = labels[~mask].view(labels.shape[0], -1)
+    similarity_matrix = similarity_matrix[~mask].view(similarity_matrix.shape[0], -1)
 
-        cl_i_num = torch.exp(torch.dot(aug_batch[i,:],aug_batch[j,:])/temp)
-        cl_i_den = 0
+    # Select and combine multiple positives
+    positives = similarity_matrix[labels.bool()].view(labels.shape[0], -1)
 
-        for k in range(n):
-            if(i!=k):
-                cl_i_den += torch.exp(torch.dot(aug_batch[i,:],aug_batch[k,:])/temp)
-        
-        cl_total += -torch.log(cl_i_num/cl_i_den)
-        print(cl_i_num/cl_i_den)
-        print(cl_total)
-    return cl_total
+    # Select only the negatives
+    negatives = similarity_matrix[~labels.bool()].view(similarity_matrix.shape[0], -1)
 
-batch = torch.ones([4,10])
-batch_aug = torch.ones([4,10])*2
+    logits = torch.cat([positives, negatives], dim=1)
+    labels = torch.zeros(logits.shape[0], dtype=torch.long).to(device)
 
-print(contrastive_loss(batch,batch_aug))
+    logits = logits / temp
+    contrastive_loss = torch.nn.CrossEntropyLoss()(logits, labels)
+
+    return contrastive_loss
 
 
-def loss_task(encoded, prototypes, target, criterion='dist', encoded_augment=None):
+def loss_task(encoded, prototypes, target, criterion='dist', encoded_augment=None, device=None):
     """Calculate loss.
     criterion: NNLoss - assign to closest prototype and calculate NNLoss
          dist - loss is distance to prototype that example needs to be assigned to
@@ -71,8 +91,8 @@ def loss_task(encoded, prototypes, target, criterion='dist', encoded_augment=Non
     acc_val = y_hat.eq(target.squeeze()).float().mean()    
     
     if(encoded_augment is not None):
-        loss_val += contrastive_loss(encoded, encoded_augment)
-
+        cl = contrastive_loss(encoded, encoded_augment, device)
+        loss_val += cl
     return loss_val, acc_val
 
 def loss_test_nn(encoded, prototypes):
@@ -114,7 +134,7 @@ def loss_test_basic(encoded, prototypes):
     
     return loss_val, args_count
 
-def loss_test(encoded, prototypes, tau, encoded_augment):
+def loss_test(encoded, prototypes, tau, encoded_augment=None, device=None):
     #prototypes = torch.stack(prototypes).squeeze() 
     loss_val_test, args_count = loss_test_basic(encoded, prototypes)
     
@@ -125,8 +145,8 @@ def loss_test(encoded, prototypes, tau, encoded_augment):
         
         loss_val_test += tau*loss_val2
         
-    if(encoded_augment):
-        loss_val_test += contrastive_loss(encoded, encoded_augment)
+    if(encoded_augment is not None):
+        loss_val_test += contrastive_loss(encoded, encoded_augment, device)
     return loss_val_test, args_count
 
 def reconstruction_loss(decoded, x):
