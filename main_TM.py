@@ -25,13 +25,13 @@ def init_seed(opt):
 def init_dataset(data_file, debug_bool):
     """Init dataset"""
 
-    test_maca = MacaData(data_file, annotation_type='cell_ontology_class_reannotated', debug_bool)
+    test_maca = MacaData(data_file, annotation_type='cell_ontology_class_reannotated')
     
-    if debug_bool: #in debug mode, keep 3 tissues and 500 genes
-        test_maca.adata = test_maca.adata[test_maca.adata.obs[annotation_type].isin(test_maca.adata.obs.tissue.drop_duplicates()[:3]),:500]
+    if debug_bool: #in debug mode, keep 3 tissues and XX genes (preprocess_data filters cells with < 500 genes, so want this number to be >>500)
+        test_maca.adata = test_maca.adata[test_maca.adata.obs.tissue.isin(test_maca.adata.obs.tissue.drop_duplicates()[:3]),:5000]
     
-    print(test_maca.adata)
     test_maca.adata = test_maca.preprocess_data(test_maca.adata)
+    print(test_maca.adata)
     tissues = list(set(test_maca.adata.obs['tissue']))
     tissues = sorted(tissues)
     
