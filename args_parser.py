@@ -57,5 +57,9 @@ def get_parser():
     parser.add_argument('--cuda',
                         action='store_true',
                         help='enables cuda')
+                        
+    parser.add_argument('--debug',
+                        action='store_true',
+                        help='enables debugging mode, which uses mini version of data and trains for one epoch')
     
     return parser

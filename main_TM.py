@@ -22,13 +22,16 @@ def init_seed(opt):
     torch.cuda.manual_seed(opt.manual_seed)
     
     
-def init_dataset(data_file):
+def init_dataset(data_file, debug_bool):
     """Init dataset"""
 
     test_maca = MacaData(data_file, annotation_type='cell_ontology_class_reannotated')
     
-    print(test_maca.adata)
+    if debug_bool: #in debug mode, keep 3 tissues and XX genes (preprocess_data filters cells with < 500 genes, so want this number to be >>500)
+        test_maca.adata = test_maca.adata[test_maca.adata.obs.tissue.isin(test_maca.adata.obs.tissue.drop_duplicates()[:3]),:5000]
+    
     test_maca.adata = test_maca.preprocess_data(test_maca.adata)
+    print(test_maca.adata)
     tissues = list(set(test_maca.adata.obs['tissue']))
     tissues = sorted(tissues)
     
@@ -39,9 +42,9 @@ def init_dataset(data_file):
         tiss_test = test_maca.get_tissue_data(tissue)
         y_test = np.array(tiss_test.obs['truth_labels'], dtype=np.int64)
         
-        test_data.append(ExperimentDataset(tiss_test.X.toarray(), tiss_test.obs_names, 
+        test_data.append(ExperimentDataset(tiss_test.X.toarray(), tiss_test.obs_names,
                                            tiss_test.var_names, tissue, y_test))
-        pretrain_data.append(ExperimentDataset(tiss_test.X.toarray(), tiss_test.obs_names, 
+        pretrain_data.append(ExperimentDataset(tiss_test.X.toarray(), tiss_test.obs_names,
                                          tiss_test.var_names, tissue))
         
     IDs_to_celltypes = {v:k for k,v in test_maca.celltype_id_map.items()}
@@ -60,9 +63,9 @@ def main():
         print("WARNING: You have a CUDA device, so you should probably run with --cuda")
     device = 'cuda:0' if torch.cuda.is_available() and params.cuda else 'cpu'
     params.device = device
-
+    
     init_seed(params)
-    test_data, pretrain_data, cell_type_name_map = init_dataset(params.data_file)
+    test_data, pretrain_data, cell_type_name_map = init_dataset(params.data_file, params.debug)
     
     
     avg_score_direct = np.zeros((len(test_data), 5))
@@ -82,21 +85,18 @@ def main():
         adata, landmarks, scores = mars.train(evaluation_mode=True)
         mars.name_cell_types(adata, landmarks, cell_type_name_map)
         
-        
-        #adata.write(params.MODEL_DIR+tissue+'/'+tissue+'.h5ad')
-        
         avg_score_direct[idx,0] = scores['accuracy']
         avg_score_direct[idx,1] = scores['f1_score']
         avg_score_direct[idx,2] = scores['nmi']
         avg_score_direct[idx,3] = scores['adj_rand']
         avg_score_direct[idx,4] = scores['adj_mi']
         
-        print('{}: Acc {}, F1_score {}, NMI {}, Adj_Rand {}, Adj_MI {}'.format(unlabeled_data.metadata, 
+        print('{}: Acc {}, F1_score {}, NMI {}, Adj_Rand {}, Adj_MI {}'.format(unlabeled_data.metadata,
                 scores['accuracy'],scores['f1_score'],scores['nmi'],
                 scores['adj_rand'],scores['adj_mi']))
         
         
-    avg_score_direct = np.mean(avg_score_direct,axis=0) 
+    avg_score_direct = np.mean(avg_score_direct,axis=0)
     print('\nAverage: Acc {}, F1_score {}, NMI {}, Adj_Rand {}, Adj_MI {}\n'.format(avg_score_direct[0],avg_score_direct[1],
             avg_score_direct[2],avg_score_direct[3],avg_score_direct[4]))
         
