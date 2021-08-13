@@ -138,6 +138,10 @@ class MARS:
             if epoch==self.epochs:
                 print('\n=== Epoch: {} ==='.format(epoch))
                 print('Train acc: {}'.format(acc_tr))
+
+            if epoch%10==0 or epoch==1:
+                torch.save(self.model.state_dict(), os.path.join(self.experiment_dir,'model-'+str(epoch).zfill(3)+'.pt'))
+
             if self.val_loader is None:
                 continue
             self.model.eval()
@@ -148,7 +152,6 @@ class MARS:
                     print('Saving model...')
                     best_acc = acc_val
                     best_state = self.model.state_dict()
-                    torch.save(model.state_dict(), os.path.join(self.experiment_dir,'source.pt'))
                 postfix = ' (Best)' if acc_val >= best_acc else ' (Best: {})'.format(best_acc)
                 print('Val loss: {}, acc: {}{}'.format(loss_val, acc_val, postfix))
             lr_scheduler.step()
