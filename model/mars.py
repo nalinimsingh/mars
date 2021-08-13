@@ -368,6 +368,7 @@ class MARS:
 
         return mean_loss, mean_accuracy
 
+    def set_requires_grad(self, requires_grad):
         for param in self.model.parameters():
             param.requires_grad = requires_grad
 
