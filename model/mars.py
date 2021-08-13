@@ -53,7 +53,10 @@ class MARS:
 
         self.n_clusters = n_clusters
         self.device = params.device
-        self.epochs = params.epochs
+        if params.debug:
+            self.epochs=1
+        else:
+            self.epochs = params.epochs
         self.epochs_pretrain = params.epochs_pretrain
         self.pretrain_flag = params.pretrain
         self.experiment_dir = params.experiment_dir
@@ -188,7 +191,7 @@ class MARS:
 
 
         adata.obsm['MARS_embedding'] = np.concatenate([a.uns['MARS_embedding'] for a in adata_all])
-        adata.write(os.path.join(self.experiment_dir,'result_adata.h5ad'))
+        adata.write(os.path.join(self.experiment_dir,self.unlabeled_metadata+'_result_adata.h5ad'))
 
         return adata
 

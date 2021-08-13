@@ -86,9 +86,6 @@ def main():
         mars.name_cell_types(adata, landmarks, cell_type_name_map)
         
         
-        tissue = unlabeled_data.metadata
-        adata.write(params.MODEL_DIR+tissue+'/'+tissue+'.h5ad')
-        
         avg_score_direct[idx,0] = scores['accuracy']
         avg_score_direct[idx,1] = scores['f1_score']
         avg_score_direct[idx,2] = scores['nmi']
