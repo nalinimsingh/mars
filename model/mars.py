@@ -23,7 +23,7 @@ from model.metrics import compute_scores
 class MARS:
 
     def __init__(self, n_clusters, params, labeled_data, unlabeled_data, pretrain_data=None,
-                 val_split=1.0, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=0.4, tau=0.2):
+                 val_split=0.85, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=0.4, tau=0.2):
         """Initialization of MARS.
         n_clusters: number of clusters in the unlabeled meta-dataset
         params: parameters of the MARS model
@@ -138,9 +138,6 @@ class MARS:
             if epoch==self.epochs:
                 print('\n=== Epoch: {} ==='.format(epoch))
                 print('Train acc: {}'.format(acc_tr))
-
-            if epoch%10==0 or epoch==1:
-                torch.save(self.model.state_dict(), os.path.join(self.experiment_dir,'model-'+str(epoch).zfill(3)+'.pt'))
 
             if self.val_loader is None:
                 continue
@@ -362,7 +359,7 @@ class MARS:
         for task in task_idx:
             x, y, _ = next(val_iter[task])
             x, y = x.to(self.device), y.to(self.device)
-            encoded = self.model(x)
+            encoded, _  = self.model(x)
             loss, acc = loss_task(encoded, prev_landmk[task], y, criterion='dist')
             total_loss += loss
             total_accuracy += acc.item()
