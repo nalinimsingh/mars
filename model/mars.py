@@ -62,6 +62,7 @@ class MARS:
         self.experiment_dir = params.experiment_dir
         if(not os.path.exists(self.experiment_dir)):
             os.mkdir(self.experiment_dir)
+        self.contrastive = params.contrastive
         self.lr = params.learning_rate
         self.lr_gamma = params.lr_scheduler_gamma
         self.step_size = params.lr_scheduler_step
@@ -316,10 +317,16 @@ class MARS:
         for task in task_idx:
             task = int(task)
             x, y, _ = next(tr_iter[task])
-            x_augment = self.augment(x)
-            x, y, x_augment = x.to(self.device), y.to(self.device), x_augment.to(self.device)
-            encoded,_ = self.model(x)
-            encoded_augment,_ = self.model(x_augment)
+            x, y = x.to(self.device), y.to(self.device)
+            encoded, _ = self.model(x)
+
+            if(self.contrastive):
+                x_augment = self.augment(x)
+                x_augment = x_augment.to(self.device)
+                encoded_augment, _ = self.model(x_augment)
+            else:
+                encoded_augment = None
+
             loss, acc = loss_task(encoded, landmk_tr[task], y, criterion='dist',
                     encoded_augment=encoded_augment, device=self.device)
             total_loss += loss

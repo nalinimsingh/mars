@@ -48,7 +48,11 @@ def get_parser():
                         type=float,
                         help='StepLR learning rate scheduler gamma, default=0.5',
                         default=0.5)
-  
+
+    parser.add_argument('-contrastive','--contrastive',
+                        action='store_true',
+                        help='Whether to use contrastive loss')
+
     parser.add_argument('-seed', '--manual_seed',
                         type=int,
                         help='input for the manual seeds initializations',
