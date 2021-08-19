@@ -82,7 +82,7 @@ def main():
         
         n_clusters = len(np.unique(unlabeled_data.y))
         mars = MARS(n_clusters, params, labeled_data, unlabeled_data, pretrain_data[idx], hid_dim_1=1000, hid_dim_2=100)
-        adata, landmarks, scores = mars.train(evaluation_mode=True)
+        adata, landmarks, scores = mars.run_training_and_eval(evaluation_mode=True)
         mars.name_cell_types(adata, landmarks, cell_type_name_map)
         
         avg_score_direct[idx,0] = scores['accuracy']

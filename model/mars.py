@@ -8,7 +8,9 @@ import torch
 import pandas as pd
 import numpy as np
 import os
+import copy 
 import anndata
+from functools import partial
 from scipy.spatial import distance
 import scanpy.api as sc
 from collections import OrderedDict
@@ -20,10 +22,14 @@ from model.landmarks import compute_landmarks_tr, init_landmarks
 from model.utils import init_data_loaders, euclidean_dist
 from model.metrics import compute_scores
 
+from ray import tune
+from ray.tune import CLIReporter
+from ray.tune.schedulers import ASHAScheduler
+
 class MARS:
 
     def __init__(self, n_clusters, params, labeled_data, unlabeled_data, pretrain_data=None,
-                 val_split=0.85, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=0.4, tau=0.2):
+                 val_split=0.85, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=[0.2,0.4,0.6,0.8], tau=[0.2]):
         """Initialization of MARS.
         n_clusters: number of clusters in the unlabeled meta-dataset
         params: parameters of the MARS model
@@ -35,8 +41,8 @@ class MARS:
         hid_dim_1: dimension in the first layer of the network (default: 1000)
         hid_dim_2: dimension in the second layer of the network (default: 100)
         p_drop: dropout probability (default: 0)
-        p_sc_drop: dropout probability for the single cell (sc) type dropout data augmentation
-        tau: regularizer for inter-cluster distance
+        p_sc_drop: list of values to tune over for dropout probability for the single cell (sc) type dropout data augmentation
+        tau: list of values to tune over for regularizer for inter-cluster distance
         """
         train_load, test_load, pretrain_load, val_load = init_data_loaders(labeled_data, unlabeled_data,
                                                                            pretrain_data, params.pretrain_batch,
@@ -48,13 +54,16 @@ class MARS:
         self.labeled_metadata = [data.metadata for data in labeled_data]
         self.unlabeled_metadata = unlabeled_data.metadata
         self.genes = unlabeled_data.yIDs
-        x_dim = self.test_loader.dataset.get_dim()
-        self.init_model(x_dim, hid_dim_1, hid_dim_2, p_drop, params.device)
+        self.x_dim = self.test_loader.dataset.get_dim()
+        self.hid_dim_1 = hid_dim_1
+        self.hid_dim_2 = hid_dim_2
+        self.p_drop = p_drop       
+        self.init_model(self.x_dim, hid_dim_1, hid_dim_2, p_drop, params.device)
 
         self.n_clusters = n_clusters
         self.device = params.device
         if params.debug:
-            self.epochs=1
+            self.epochs=2
         else:
             self.epochs = params.epochs
         self.epochs_pretrain = params.epochs_pretrain
@@ -66,9 +75,10 @@ class MARS:
         self.lr = params.learning_rate
         self.lr_gamma = params.lr_scheduler_gamma
         self.step_size = params.lr_scheduler_step
-        self.tau = tau
-        self.p_sc_drop = p_sc_drop
-
+        self.config = { #hyperparameters to tune
+                  "p_sc_drop": tune.choice(p_sc_drop),
+                  "tau": tune.choice(tau)
+        }           
 
     def init_model(self, x_dim, hid_dim, z_dim, p_drop, device):
         """
@@ -100,7 +110,7 @@ class MARS:
                 loss.backward()
                 optim.step()
 
-    def train(self, evaluation_mode=True, save_all_embeddings=True):
+    def train(self, config, save_all_embeddings=True, checkpoint_dir=None):
         """Train model.
         evaluation_mode: if True, validates model on the unlabeled dataset. In the evaluation mode, ground truth labels
                         of the unlabeled dataset must be provided to validate model
@@ -131,11 +141,12 @@ class MARS:
                                                step_size=self.step_size)
 
         best_acc = 0
+        best_epoch = self.epochs
         for epoch in range(1, self.epochs+1):
             self.model.train()
             loss_tr, acc_tr, landmk_tr, landmk_test = self.do_epoch(tr_iter, test_iter,
                                               optim, optim_landmk_test,
-                                              landmk_tr, landmk_test)
+                                              landmk_tr, landmk_test, tau=config['tau'], p_sc_drop=config['p_sc_drop'])
             if epoch==self.epochs:
                 print('\n=== Epoch: {} ==='.format(epoch))
                 print('Train acc: {}'.format(acc_tr))
@@ -149,20 +160,64 @@ class MARS:
                 if acc_val > best_acc:
                     print('Saving model...')
                     best_acc = acc_val
-                    best_state = self.model.state_dict()
+                    best_epoch = epoch
+                    best_model = copy.deepcopy(self.model)
+                torch.save(best_model.state_dict(), os.path.join(self.experiment_dir,'model-BEST-epoch'+str(best_epoch))+'.pt')
                 postfix = ' (Best)' if acc_val >= best_acc else ' (Best: {})'.format(best_acc)
                 print('Val loss: {}, acc: {}{}'.format(loss_val, acc_val, postfix))
+
+            with tune.checkpoint_dir(epoch) as checkpoint_dir:
+                path = os.path.join(checkpoint_dir, "checkpoint")
+                torch.save((self.model.state_dict(), optim.state_dict()), path) 
+            tune.report(loss=loss_val, accuracy=acc_val)
             lr_scheduler.step()
-
+        
         if self.val_loader is None:
-            best_state = self.model.state_dict() # best is last
+            best_model = copy.deepcopy(self.model) # best is lasti
+            torch.save(best_model.state_dict(), os.path.join(self.experiment_dir,'model-novalset-finalepoch'+str(best_epoch))+'.pt')
 
-        landmk_all = landmk_tr+[torch.stack(landmk_test).squeeze()]
+        self.model = copy.deepcopy(best_model)
+        del best_model
+        print("Finished Training")
 
-        adata_test, eval_results = self.assign_labels(landmk_all[-1], evaluation_mode)
+    def run_training_and_eval(self, evaluation_mode=True):
+        
+        scheduler = ASHAScheduler(
+            metric="loss",
+            mode="min",
+            max_t=self.epochs,
+            grace_period=1
+        )
 
-        adata = self.save_result(tr_iter, adata_test, save_all_embeddings)
+        reporter = CLIReporter(metric_columns=["loss", "accuracy", "training_iteration"])
 
+        result = tune.run(
+            partial(self.train, checkpoint_dir = self.experiment_dir+"/ray_outputs/"),
+            resources_per_trial={"gpu": 1},
+            config=self.config,
+            scheduler=scheduler,
+            progress_reporter=reporter
+        )
+
+        best_trial = result.get_best_trial("loss", "min", "all")
+        print("Best trial config: {}".format(best_trial.config))
+        print("Best trial final validation loss: {}".format(best_trial.last_result["loss"]))
+        print("Best trial final validation accuracy: {}".format(best_trial.last_result["accuracy"]))
+        
+        best_trained_model = FullNet(self.x_dim, self.hid_dim, self.z_dim, self.p_drop).to(device)
+        device = "cpu"
+        if torch.cuda.is_available():
+            device = "cuda:0"
+        best_trained_model.to(device)
+
+        best_checkpoint_dir = best_trial.checkpoint.value
+        model_state, optimizer_state = torch.load(os.path.join(best_checkpoint_dir, "checkpoint"))
+        #landmk_all = landmk_tr+[torch.stack(landmk_test).squeeze()]
+
+        #adata_test, eval_results = self.assign_labels(landmk_all[-1], evaluation_mode)
+
+        #adata = self.save_result(tr_iter, adata_test, save_all_embeddings)
+        adata, landmk_all, eval_results = None, None, None
         if evaluation_mode:
             return adata, landmk_all, eval_results
 
@@ -245,7 +300,7 @@ class MARS:
 
         return adata
 
-    def augment(self, x, type="dropout"):
+    def augment(self, x, type="dropout", p_sc_drop=None):
         """
         Applies a range of augmentations (given by "type") to x
         type: string, valid arguments include "dropout"
@@ -253,7 +308,7 @@ class MARS:
         Returns: x_augment
         """
         if type == "dropout":
-            drp = torch.nn.Dropout(p=self.p_sc_drop)
+            drp = torch.nn.Dropout(p=p_sc_drop)
             x_augment = drp(x)
 
         else:
@@ -262,7 +317,7 @@ class MARS:
         return x_augment
 
 
-    def do_epoch(self, tr_iter, test_iter, optim, optim_landmk_test, landmk_tr, landmk_test):
+    def do_epoch(self, tr_iter, test_iter, optim, optim_landmk_test, landmk_tr, landmk_test, tau, p_sc_drop=None):
         """
         One training epoch.
         tr_iter: iterator over labeled meta-data
@@ -286,7 +341,7 @@ class MARS:
             x, y, _ = next(tr_iter[task])
             x, y = x.to(self.device), y.to(self.device)
             encoded,_ = self.model(x)
-            curr_landmk_tr = compute_landmarks_tr(encoded, y, landmk_tr[task], tau=self.tau)
+            curr_landmk_tr = compute_landmarks_tr(encoded, y, landmk_tr[task], tau=tau)
             landmk_tr[task] = curr_landmk_tr.data # save landmarks
 
         for landmk in landmk_test:
@@ -295,7 +350,7 @@ class MARS:
         x,y_test,_ = next(test_iter)
         x = x.to(self.device)
         encoded,_ = self.model(x)
-        loss, args_count = loss_test(encoded, torch.stack(landmk_test).squeeze(), self.tau)
+        loss, args_count = loss_test(encoded, torch.stack(landmk_test).squeeze(), tau)
 
         #if len(args_count)<len(torch.unique(y_test)):
             #print('Empty cluster')
@@ -321,7 +376,7 @@ class MARS:
             encoded, _ = self.model(x)
 
             if(self.contrastive):
-                x_augment = self.augment(x)
+                x_augment = self.augment(x, p_sc_drop)
                 x_augment = x_augment.to(self.device)
                 encoded_augment, _ = self.model(x_augment)
             else:
@@ -340,7 +395,7 @@ class MARS:
         x,y,_ = next(test_iter)
         x = x.to(self.device)
         encoded,_ = self.model(x)
-        loss,_ = loss_test(encoded, torch.stack(landmk_test).squeeze(), self.tau)
+        loss,_ = loss_test(encoded, torch.stack(landmk_test).squeeze(), tau)
         total_loss += loss
         ntasks += 1
 
