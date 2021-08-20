@@ -191,10 +191,12 @@ class MARS:
 
         reporter = CLIReporter(metric_columns=["loss", "accuracy", "training_iteration"])
 
+        raytune_dir = os.path.join(self.experiment_dir,'ray_outputs')
         result = tune.run(
-            partial(self.train, checkpoint_dir = self.experiment_dir+"/ray_outputs/"),
+            partial(self.train, checkpoint_dir = raytune_dir),
             resources_per_trial={"gpu": 1},
             config=self.config,
+            local_dir = raytune_dir,
             scheduler=scheduler,
             progress_reporter=reporter
         )
