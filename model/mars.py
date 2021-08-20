@@ -169,7 +169,7 @@ class MARS:
             with tune.checkpoint_dir(epoch) as checkpoint_dir:
                 path = os.path.join(checkpoint_dir, "checkpoint")
                 torch.save((self.model.state_dict(), optim.state_dict()), path) 
-            tune.report(loss=loss_val, accuracy=acc_val)
+            tune.report(loss=loss_val.item(), accuracy=acc_val)
             lr_scheduler.step()
         
         if self.val_loader is None:
@@ -206,7 +206,8 @@ class MARS:
         print("Best trial final validation loss: {}".format(best_trial.last_result["loss"]))
         print("Best trial final validation accuracy: {}".format(best_trial.last_result["accuracy"]))
         
-        best_trained_model = FullNet(self.x_dim, self.hid_dim, self.z_dim, self.p_drop).to(device)
+        best_trained_model = FullNet(self.x_dim, self.hid_dim_1, self.hid_dim_2, self.p_drop).to(
+                self.device)
         device = "cpu"
         if torch.cuda.is_available():
             device = "cuda:0"
@@ -214,12 +215,11 @@ class MARS:
 
         best_checkpoint_dir = best_trial.checkpoint.value
         model_state, optimizer_state = torch.load(os.path.join(best_checkpoint_dir, "checkpoint"))
-        #landmk_all = landmk_tr+[torch.stack(landmk_test).squeeze()]
+        landmk_all = landmk_tr+[torch.stack(landmk_test).squeeze()]
 
-        #adata_test, eval_results = self.assign_labels(landmk_all[-1], evaluation_mode)
+        adata_test, eval_results = self.assign_labels(landmk_all[-1], evaluation_mode)
 
-        #adata = self.save_result(tr_iter, adata_test, save_all_embeddings)
-        adata, landmk_all, eval_results = None, None, None
+        adata = self.save_result(tr_iter, adata_test, save_all_embeddings)
         if evaluation_mode:
             return adata, landmk_all, eval_results
 
