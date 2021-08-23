@@ -23,7 +23,7 @@ from model.metrics import compute_scores
 class MARS:
 
     def __init__(self, n_clusters, params, labeled_data, unlabeled_data, pretrain_data=None,
-                 val_split=0.85, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=0.4, tau=0.2):
+                 val_split=0.85, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=0.4, tau=0.2, rho=1.0):
         """Initialization of MARS.
         n_clusters: number of clusters in the unlabeled meta-dataset
         params: parameters of the MARS model
@@ -37,6 +37,7 @@ class MARS:
         p_drop: dropout probability (default: 0)
         p_sc_drop: dropout probability for the single cell (sc) type dropout data augmentation
         tau: regularizer for inter-cluster distance
+        rho: contrastive loss weight
         """
         train_load, test_load, pretrain_load, val_load = init_data_loaders(labeled_data, unlabeled_data,
                                                                            pretrain_data, params.pretrain_batch,
@@ -67,6 +68,7 @@ class MARS:
         self.lr_gamma = params.lr_scheduler_gamma
         self.step_size = params.lr_scheduler_step
         self.tau = tau
+        self.rho = rho
         self.p_sc_drop = p_sc_drop
 
 
@@ -327,7 +329,7 @@ class MARS:
             else:
                 encoded_augment = None
 
-            loss, acc = loss_task(encoded, landmk_tr[task], y, criterion='dist',
+            loss, acc = loss_task(encoded, landmk_tr[task], y, rho=self.rho, criterion='dist',
                     encoded_augment=encoded_augment, device=self.device)
             total_loss += loss
             total_accuracy += acc.item()
