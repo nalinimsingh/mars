@@ -57,7 +57,7 @@ def contrastive_loss(encoded, encoded_aug, device=None, temp=0.07, n_sample=100)
     return contrastive_loss
 
 
-def loss_task(encoded, prototypes, target, criterion='dist', encoded_augment=None, device=None):
+def loss_task(encoded, prototypes, target, rho=0, criterion='dist', encoded_augment=None, device=None):
     """Calculate loss.
     criterion: NNLoss - assign to closest prototype and calculate NNLoss
          dist - loss is distance to prototype that example needs to be assigned to
@@ -92,7 +92,7 @@ def loss_task(encoded, prototypes, target, criterion='dist', encoded_augment=Non
     
     if(encoded_augment is not None):
         cl = contrastive_loss(encoded, encoded_augment, device)
-        loss_val += cl
+        loss_val += rho*cl
     return loss_val, acc_val
 
 def loss_test_nn(encoded, prototypes):
