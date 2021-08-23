@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 import os
 import anndata
+import copy
 from scipy.spatial import distance
 import scanpy.api as sc
 from collections import OrderedDict
@@ -23,7 +24,7 @@ from model.metrics import compute_scores
 class MARS:
 
     def __init__(self, n_clusters, params, labeled_data, unlabeled_data, pretrain_data=None,
-                 val_split=0.85, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=0.4, tau=0.2):
+                 val_split=0.85, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=[0.2,0.4,0.6,0.8], tau=[0.2]):
         """Initialization of MARS.
         n_clusters: number of clusters in the unlabeled meta-dataset
         params: parameters of the MARS model
@@ -35,8 +36,8 @@ class MARS:
         hid_dim_1: dimension in the first layer of the network (default: 1000)
         hid_dim_2: dimension in the second layer of the network (default: 100)
         p_drop: dropout probability (default: 0)
-        p_sc_drop: dropout probability for the single cell (sc) type dropout data augmentation
-        tau: regularizer for inter-cluster distance
+        p_sc_drop: list of values to tune over for dropout probability for the single cell (sc) type dropout data augmentation
+        tau: list of values to tune over for regularizer for inter-cluster distance
         """
         train_load, test_load, pretrain_load, val_load = init_data_loaders(labeled_data, unlabeled_data,
                                                                            pretrain_data, params.pretrain_batch,
@@ -131,32 +132,46 @@ class MARS:
                                                step_size=self.step_size)
 
         best_acc = 0
-        for epoch in range(1, self.epochs+1):
-            self.model.train()
-            loss_tr, acc_tr, landmk_tr, landmk_test = self.do_epoch(tr_iter, test_iter,
-                                              optim, optim_landmk_test,
-                                              landmk_tr, landmk_test)
-            if epoch==self.epochs:
-                print('\n=== Epoch: {} ==='.format(epoch))
-                print('Train acc: {}'.format(acc_tr))
+        if self.val_loader is None: #no validation set, only use first set of hyperparameters provided
+            self.tau = self.tau[:1]
+            self.p_sc_drop = self.p_sc_drop[:1]
+        for tau in self.tau: #hyperparam tuning
+            for p_sc_drop in self.p_sc_drop: #hyperparam tuning
+                print('Training with hyperparameters tau {} and p_sc_drop {}'.format(tau, p_sc_drop))
+                best_epoch = self.epochs
+                for epoch in range(1, self.epochs+1):
+                    self.model.train()
+                    loss_tr, acc_tr, landmk_tr, landmk_test = self.do_epoch(tr_iter, test_iter,
+                                                      optim, optim_landmk_test,
+                                                      landmk_tr, landmk_test, tau, p_sc_drop)
+                        
+                    if epoch==self.epochs and self.val_loader is None: #save last epoch for first combo of hyperparameter settings
+                        print('\n=== Epoch: {} ==='.format(epoch))
+                        print('Train acc: {}'.format(acc_tr))
+                        
+                        print("WARNING: running without a validation set. Will use final epoch for the first combination of hyperparameters provided.")
+                        best_model = copy.deepcopy(self.model) # best epoch is last
+                        torch.save(best_model.state_dict(), os.path.join(self.experiment_dir,'model-novalset-finalepoch-tau'+tau+'-p_sc'+p_sc_drop)+'.pt')
+                        
+                    if self.val_loader is None:
+                        continue
+                    self.model.eval()
 
-            if self.val_loader is None:
-                continue
-            self.model.eval()
+                    with torch.no_grad():
+                        loss_val,acc_val = self.do_val_epoch(val_iter, landmk_tr)
+                        if acc_val > best_acc:
+                            print('Saving model...')
+                            best_acc = acc_val
+                            best_epoch = epoch
+                            best_model = copy.deepcopy(self.model)
+                            torch.save(best_model.state_dict(), os.path.join(self.experiment_dir,'model-BEST-tau'+tau+'-p_sc'+p_sc_drop+'-epoch'+str(best_epoch))+'.pt')
+                        postfix = ' (Best)' if acc_val >= best_acc else ' (Best: {})'.format(best_acc)
+                        print('Epoch {} val loss: {}, acc: {}{}'.format(epoch, loss_val, acc_val, postfix))
+                    lr_scheduler.step()
 
-            with torch.no_grad():
-                loss_val,acc_val = self.do_val_epoch(val_iter, landmk_tr)
-                if acc_val > best_acc:
-                    print('Saving model...')
-                    best_acc = acc_val
-                    best_state = self.model.state_dict()
-                postfix = ' (Best)' if acc_val >= best_acc else ' (Best: {})'.format(best_acc)
-                print('Val loss: {}, acc: {}{}'.format(loss_val, acc_val, postfix))
-            lr_scheduler.step()
-
-        if self.val_loader is None:
-            best_state = self.model.state_dict() # best is last
-
+        self.model = copy.deepcopy(best_model)
+        del best_model
+        
         landmk_all = landmk_tr+[torch.stack(landmk_test).squeeze()]
 
         adata_test, eval_results = self.assign_labels(landmk_all[-1], evaluation_mode)
@@ -245,7 +260,7 @@ class MARS:
 
         return adata
 
-    def augment(self, x, type="dropout"):
+    def augment(self, x, type="dropout", p_sc_drop=None):
         """
         Applies a range of augmentations (given by "type") to x
         type: string, valid arguments include "dropout"
@@ -253,7 +268,7 @@ class MARS:
         Returns: x_augment
         """
         if type == "dropout":
-            drp = torch.nn.Dropout(p=self.p_sc_drop)
+            drp = torch.nn.Dropout(p=p_sc_drop)
             x_augment = drp(x)
 
         else:
@@ -262,7 +277,7 @@ class MARS:
         return x_augment
 
 
-    def do_epoch(self, tr_iter, test_iter, optim, optim_landmk_test, landmk_tr, landmk_test):
+    def do_epoch(self, tr_iter, test_iter, optim, optim_landmk_test, landmk_tr, landmk_test, tau, p_sc_drop=None):
         """
         One training epoch.
         tr_iter: iterator over labeled meta-data
@@ -286,7 +301,7 @@ class MARS:
             x, y, _ = next(tr_iter[task])
             x, y = x.to(self.device), y.to(self.device)
             encoded,_ = self.model(x)
-            curr_landmk_tr = compute_landmarks_tr(encoded, y, landmk_tr[task], tau=self.tau)
+            curr_landmk_tr = compute_landmarks_tr(encoded, y, landmk_tr[task], tau=tau)
             landmk_tr[task] = curr_landmk_tr.data # save landmarks
 
         for landmk in landmk_test:
@@ -295,7 +310,7 @@ class MARS:
         x,y_test,_ = next(test_iter)
         x = x.to(self.device)
         encoded,_ = self.model(x)
-        loss, args_count = loss_test(encoded, torch.stack(landmk_test).squeeze(), self.tau)
+        loss, args_count = loss_test(encoded, torch.stack(landmk_test).squeeze(), tau)
 
         #if len(args_count)<len(torch.unique(y_test)):
             #print('Empty cluster')
@@ -321,7 +336,7 @@ class MARS:
             encoded, _ = self.model(x)
 
             if(self.contrastive):
-                x_augment = self.augment(x)
+                x_augment = self.augment(x, p_sc_drop=p_sc_drop)
                 x_augment = x_augment.to(self.device)
                 encoded_augment, _ = self.model(x_augment)
             else:
@@ -340,7 +355,7 @@ class MARS:
         x,y,_ = next(test_iter)
         x = x.to(self.device)
         encoded,_ = self.model(x)
-        loss,_ = loss_test(encoded, torch.stack(landmk_test).squeeze(), self.tau)
+        loss,_ = loss_test(encoded, torch.stack(landmk_test).squeeze(), tau)
         total_loss += loss
         ntasks += 1
 
