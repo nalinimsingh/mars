@@ -155,7 +155,7 @@ class MARS:
                                            gamma=self.lr_gamma,
                                            step_size=self.step_size)
             best_epoch = self.epochs
-            writer = SummaryWriter(os.path.join(self.experiment_dir,'tensorboard',self.unlabeled_metadata+
+            writer = SummaryWriter(os.path.join(self.experiment_dir,'tensorboard',self.unlabeled_metadata+'-tau'+str(tau)+'-p_sc'+str(p_sc_drop)+'-rho'+str(rho)))
             for epoch in range(1, self.epochs+1):
                 self.model.train()
                 loss_tr, acc_tr, landmk_tr, landmk_test = self.do_epoch(tr_iter, test_iter,
