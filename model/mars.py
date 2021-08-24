@@ -5,6 +5,7 @@ Implementation of MARS model.
 '''
 
 import torch
+from torch.utils.tensorboard import SummaryWriter
 import pandas as pd
 import numpy as np
 import os
@@ -151,6 +152,11 @@ class MARS:
                                                gamma=self.lr_gamma,
                                                step_size=self.step_size)
                 best_epoch = self.epochs
+
+                # Set up writer for tensorboard logs
+                writer = SummaryWriter(os.path.join(self.experiment_dir,'tensorboard',self.unlabeled_metadata+
+                    '-tau'+str(tau)+'-p_sc'+str(p_sc_drop)))
+
                 for epoch in range(1, self.epochs+1):
                     self.model.train()
                     loss_tr, acc_tr, landmk_tr, landmk_test = self.do_epoch(tr_iter, test_iter,
@@ -181,6 +187,11 @@ class MARS:
                             best_psc = p_sc_drop
                             best_model = copy.deepcopy(self.model)
                     lr_scheduler.step()
+
+                    writer.add_scalar('Loss/train', loss_tr, epoch)
+                    writer.add_scalar('Loss/val', loss_val, epoch)
+                    writer.add_scalar('Accuracy/train', acc_tr, epoch)
+                    writer.add_scalar('Accuracy/val', acc_val, epoch)
 
         self.model = copy.deepcopy(best_model)
         del best_model
