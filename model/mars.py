@@ -10,6 +10,7 @@ import numpy as np
 import os
 import anndata
 import copy
+import itertools
 from scipy.spatial import distance
 import scanpy.api as sc
 from collections import OrderedDict
@@ -24,7 +25,7 @@ from model.metrics import compute_scores
 class MARS:
 
     def __init__(self, n_clusters, params, labeled_data, unlabeled_data, pretrain_data=None,
-                 val_split=0.85, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=[0.2,0.4,0.6,0.8], tau=[0.1,0.2,0.3,0.4], rho=1):
+                 val_split=0.85, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=[0.2,0.4,0.6,0.8], tau=[0,0.1,0.2,0.3], rho=[0.5,0.8,1]):
         """Initialization of MARS.
         n_clusters: number of clusters in the unlabeled meta-dataset
         params: parameters of the MARS model
@@ -37,8 +38,8 @@ class MARS:
         hid_dim_2: dimension in the second layer of the network (default: 100)
         p_drop: dropout probability (default: 0)
         p_sc_drop: list of values to tune over for dropout probability for the single cell (sc) type dropout data augmentation
-        tau: list of values to tune over for regularizer for inter-cluster distance
-        rho: contrastive loss weight
+        tau: list of values to tune over for regularizer for inter-cluster distance (can't = 1 or will get division by 0 error)
+        rho: list of values to tune over for contrastive loss weight
         """
         train_load, test_load, pretrain_load, val_load = init_data_loaders(labeled_data, unlabeled_data,
                                                                            pretrain_data, params.pretrain_batch,
@@ -69,11 +70,13 @@ class MARS:
         self.lr_gamma = params.lr_scheduler_gamma
         self.step_size = params.lr_scheduler_step
         self.tau = tau
-        self.rho = rho
         if self.contrastive:
             self.p_sc_drop = p_sc_drop
-        else:
-            self.p_sc_drop = [None] #doesn't get used if not in contrastive mode, no need to tune
+            self.rho = rho
+        else: #don't get used if not in contrastive mode, no need to tune
+            self.p_sc_drop = [None]
+            self.rho = [None]
+            print("\np_sc_drop and rho set to None because not in contrastive mode")
 
 
     def init_model(self, x_dim, hid_dim, z_dim, p_drop, device):
@@ -136,56 +139,57 @@ class MARS:
         best_acc = 0
         best_tau = None
         best_psc = None
+        best_rho = None
         if self.val_loader is None: #no validation set, only use first set of hyperparameters provided
             self.tau = self.tau[:1]
             self.p_sc_drop = self.p_sc_drop[:1]
-        for tau in self.tau: #hyperparam tuning
-            if not self.contrastive:
-                print("\np_sc_drop set to None because not in contrastive mode")
-            for p_sc_drop in self.p_sc_drop: #hyperparam tuning
-                print('\nTraining with hyperparameters tau {} and p_sc_drop {}'.format(tau, p_sc_drop))
-                self.model = copy.deepcopy(init_model) #for each hyperparam, reset weights
-                landmk_tr, landmk_test = init_landmarks(self.n_clusters, self.train_loader, self.test_loader, self.model, self.device)
-                optim, optim_landmk_test = self.init_optim(list(self.model.encoder.parameters()), landmk_test, self.lr)
-                lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer=optim,
-                                               gamma=self.lr_gamma,
-                                               step_size=self.step_size)
-                best_epoch = self.epochs
-                for epoch in range(1, self.epochs+1):
-                    self.model.train()
-                    loss_tr, acc_tr, landmk_tr, landmk_test = self.do_epoch(tr_iter, test_iter,
-                                                      optim, optim_landmk_test,
-                                                      landmk_tr, landmk_test, tau, p_sc_drop)
-                        
-                    if epoch==self.epochs and self.val_loader is None: #save last epoch for first combo of hyperparameter settings
-                        print('\n=== Epoch: {} ==='.format(epoch))
-                        print('Train acc: {}'.format(acc_tr))
-                        
-                        print("WARNING: running without a validation set. Will use final epoch for the first combination of hyperparameters provided.")
-                        best_model = copy.deepcopy(self.model) # best epoch is last
-                        torch.save(best_model.state_dict(), os.path.join(self.experiment_dir,'model-'+self.unlabeled_metadata+'-novalset-finalepoch-tau'+str(tau)+'-p_sc'+str(p_sc_drop))+'.pt')
-                        
-                    if self.val_loader is None:
-                        continue
-                    self.model.eval()
+            self.rho = self.rho[:1]
+        hyperparams = itertools.product(self.tau, self.p_sc_drop, self.rho)
+        for tau, p_sc_drop, rho in hyperparams: #hyperparam tuning
+            print('\nTraining with hyperparameters tau {}, p_sc_drop {}, and rho {}'.format(tau, p_sc_drop, rho))
+            self.model = copy.deepcopy(init_model) #for each hyperparam, reset weights
+            landmk_tr, landmk_test = init_landmarks(self.n_clusters, self.train_loader, self.test_loader, self.model, self.device)
+            optim, optim_landmk_test = self.init_optim(list(self.model.encoder.parameters()), landmk_test, self.lr)
+            lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer=optim,
+                                           gamma=self.lr_gamma,
+                                           step_size=self.step_size)
+            best_epoch = self.epochs
+            for epoch in range(1, self.epochs+1):
+                self.model.train()
+                loss_tr, acc_tr, landmk_tr, landmk_test = self.do_epoch(tr_iter, test_iter,
+                                                  optim, optim_landmk_test,
+                                                  landmk_tr, landmk_test, tau, rho, p_sc_drop)
+                    
+                if epoch==self.epochs and self.val_loader is None: #save last epoch for first combo of hyperparameter settings
+                    print('\n=== Epoch: {} ==='.format(epoch))
+                    print('Train acc: {}'.format(acc_tr))
+                    
+                    print("WARNING: running without a validation set. Will use final epoch for the first combination of hyperparameters provided.")
+                    best_model = copy.deepcopy(self.model) # best epoch is last
+                    torch.save(self.model.state_dict(), os.path.join(self.experiment_dir,'model-{}-novalset-finalepoch-tau{}-p_sc{}-rho{}.pt'.format(self.unlabeled_metadata, tau, p_sc_drop, rho)))
+                    
+                if self.val_loader is None:
+                    continue
+                self.model.eval()
 
-                    with torch.no_grad():
-                        loss_val,acc_val = self.do_val_epoch(val_iter, landmk_tr)
-                        postfix = ' (Best)' if acc_val >= best_acc else ' (Best: {})'.format(best_acc)
-                        print('Epoch {} val loss: {}, acc: {}{}'.format(epoch, loss_val, acc_val, postfix))
-                        if acc_val > best_acc:
-                            print('Saving model...')
-                            best_acc = acc_val
-                            best_epoch = epoch
-                            best_tau = tau
-                            best_psc = p_sc_drop
-                            best_model = copy.deepcopy(self.model)
-                    lr_scheduler.step()
+                with torch.no_grad():
+                    loss_val,acc_val = self.do_val_epoch(val_iter, landmk_tr)
+                    postfix = ' (Best)' if acc_val >= best_acc else ' (Best: {})'.format(best_acc)
+                    print('Epoch {} val loss: {}, acc: {}{}'.format(epoch, loss_val, acc_val, postfix))
+                    if acc_val > best_acc:
+                        print('Saving model...')
+                        best_acc = acc_val
+                        best_epoch = epoch
+                        best_tau = tau
+                        best_psc = p_sc_drop
+                        best_rho = rho
+                        best_model = copy.deepcopy(self.model)
+                lr_scheduler.step()
 
         self.model = copy.deepcopy(best_model)
         del best_model
         if self.val_loader is not None: #save best model tuned with validation set
-            torch.save(self.model.state_dict(), os.path.join(self.experiment_dir,'model-'+self.unlabeled_metadata+'-BEST-tau'+str(best_tau)+'-p_sc'+str(best_psc)+'-epoch'+str(best_epoch))+'.pt')
+            torch.save(self.model.state_dict(), os.path.join(self.experiment_dir,'model-{}-BEST-tau{}-p_sc{}-rho{}-epoch{}.pt'.format(self.unlabeled_metadata, best_tau, best_psc, best_rho, best_epoch)))
         
         landmk_all = landmk_tr+[torch.stack(landmk_test).squeeze()]
 
@@ -292,7 +296,7 @@ class MARS:
         return x_augment
 
 
-    def do_epoch(self, tr_iter, test_iter, optim, optim_landmk_test, landmk_tr, landmk_test, tau, p_sc_drop=None):
+    def do_epoch(self, tr_iter, test_iter, optim, optim_landmk_test, landmk_tr, landmk_test, tau, rho, p_sc_drop):
         """
         One training epoch.
         tr_iter: iterator over labeled meta-data
@@ -357,7 +361,7 @@ class MARS:
             else:
                 encoded_augment = None
 
-            loss, acc = loss_task(encoded, landmk_tr[task], y, rho=self.rho, criterion='dist',
+            loss, acc = loss_task(encoded, landmk_tr[task], y, rho=rho, criterion='dist',
                     encoded_augment=encoded_augment, device=self.device)
             total_loss += loss
             total_accuracy += acc.item()
