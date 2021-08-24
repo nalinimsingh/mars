@@ -24,7 +24,7 @@ from model.metrics import compute_scores
 class MARS:
 
     def __init__(self, n_clusters, params, labeled_data, unlabeled_data, pretrain_data=None,
-                 val_split=0.85, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=[0.2,0.4,0.6,0.8], tau=[0.2], rho=1):
+                 val_split=0.85, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=[0.2,0.4,0.6,0.8], tau=[0.1,0.2,0.3,0.4], rho=1):
         """Initialization of MARS.
         n_clusters: number of clusters in the unlabeled meta-dataset
         params: parameters of the MARS model
@@ -56,7 +56,7 @@ class MARS:
         self.n_clusters = n_clusters
         self.device = params.device
         if params.debug:
-            self.epochs=1
+            self.epochs=3
         else:
             self.epochs = params.epochs
         self.epochs_pretrain = params.epochs_pretrain
@@ -70,7 +70,10 @@ class MARS:
         self.step_size = params.lr_scheduler_step
         self.tau = tau
         self.rho = rho
-        self.p_sc_drop = p_sc_drop
+        if self.contrastive:
+            self.p_sc_drop = p_sc_drop
+        else:
+            self.p_sc_drop = [None] #doesn't get used if not in contrastive mode, no need to tune
 
 
     def init_model(self, x_dim, hid_dim, z_dim, p_drop, device):
@@ -126,20 +129,27 @@ class MARS:
             self.pretrain(optim_pretrain)
         else:
             self.model.load_state_dict(torch.load(self.MODEL_FILE))
+        
         test_iter = iter(self.test_loader)
-        landmk_tr, landmk_test = init_landmarks(self.n_clusters, self.train_loader, self.test_loader, self.model, self.device)
-        optim, optim_landmk_test = self.init_optim(list(self.model.encoder.parameters()), landmk_test, self.lr)
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer=optim,
-                                               gamma=self.lr_gamma,
-                                               step_size=self.step_size)
-
+        
+        init_model = copy.deepcopy(self.model)
         best_acc = 0
+        best_tau = None
+        best_psc = None
         if self.val_loader is None: #no validation set, only use first set of hyperparameters provided
             self.tau = self.tau[:1]
             self.p_sc_drop = self.p_sc_drop[:1]
         for tau in self.tau: #hyperparam tuning
+            if not self.contrastive:
+                print("\np_sc_drop set to None because not in contrastive mode")
             for p_sc_drop in self.p_sc_drop: #hyperparam tuning
-                print('Training with hyperparameters tau {} and p_sc_drop {}'.format(tau, p_sc_drop))
+                print('\nTraining with hyperparameters tau {} and p_sc_drop {}'.format(tau, p_sc_drop))
+                self.model = copy.deepcopy(init_model) #for each hyperparam, reset weights
+                landmk_tr, landmk_test = init_landmarks(self.n_clusters, self.train_loader, self.test_loader, self.model, self.device)
+                optim, optim_landmk_test = self.init_optim(list(self.model.encoder.parameters()), landmk_test, self.lr)
+                lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer=optim,
+                                               gamma=self.lr_gamma,
+                                               step_size=self.step_size)
                 best_epoch = self.epochs
                 for epoch in range(1, self.epochs+1):
                     self.model.train()
@@ -153,7 +163,7 @@ class MARS:
                         
                         print("WARNING: running without a validation set. Will use final epoch for the first combination of hyperparameters provided.")
                         best_model = copy.deepcopy(self.model) # best epoch is last
-                        torch.save(best_model.state_dict(), os.path.join(self.experiment_dir,'model-novalset-finalepoch-tau'+tau+'-p_sc'+p_sc_drop)+'.pt')
+                        torch.save(best_model.state_dict(), os.path.join(self.experiment_dir,'model-'+self.unlabeled_metadata+'-novalset-finalepoch-tau'+str(tau)+'-p_sc'+str(p_sc_drop))+'.pt')
                         
                     if self.val_loader is None:
                         continue
@@ -161,18 +171,21 @@ class MARS:
 
                     with torch.no_grad():
                         loss_val,acc_val = self.do_val_epoch(val_iter, landmk_tr)
+                        postfix = ' (Best)' if acc_val >= best_acc else ' (Best: {})'.format(best_acc)
+                        print('Epoch {} val loss: {}, acc: {}{}'.format(epoch, loss_val, acc_val, postfix))
                         if acc_val > best_acc:
                             print('Saving model...')
                             best_acc = acc_val
                             best_epoch = epoch
+                            best_tau = tau
+                            best_psc = p_sc_drop
                             best_model = copy.deepcopy(self.model)
-                            torch.save(best_model.state_dict(), os.path.join(self.experiment_dir,'model-BEST-tau'+tau+'-p_sc'+p_sc_drop+'-epoch'+str(best_epoch))+'.pt')
-                        postfix = ' (Best)' if acc_val >= best_acc else ' (Best: {})'.format(best_acc)
-                        print('Epoch {} val loss: {}, acc: {}{}'.format(epoch, loss_val, acc_val, postfix))
                     lr_scheduler.step()
 
         self.model = copy.deepcopy(best_model)
         del best_model
+        if self.val_loader is not None: #save best model tuned with validation set
+            torch.save(self.model.state_dict(), os.path.join(self.experiment_dir,'model-'+self.unlabeled_metadata+'-BEST-tau'+str(best_tau)+'-p_sc'+str(best_psc)+'-epoch'+str(best_epoch))+'.pt')
         
         landmk_all = landmk_tr+[torch.stack(landmk_test).squeeze()]
 
