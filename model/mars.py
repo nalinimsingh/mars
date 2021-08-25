@@ -141,6 +141,7 @@ class MARS:
         best_tau = None
         best_psc = None
         best_rho = None
+        best_epoch = 0
         if self.val_loader is None: #no validation set, only use first set of hyperparameters provided
             self.tau = self.tau[:1]
             self.p_sc_drop = self.p_sc_drop[:1]
@@ -154,7 +155,6 @@ class MARS:
             lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer=optim,
                                            gamma=self.lr_gamma,
                                            step_size=self.step_size)
-            best_epoch = self.epochs
             writer = SummaryWriter(os.path.join(self.experiment_dir,'tensorboard',self.unlabeled_metadata+'-tau'+str(tau)+'-p_sc'+str(p_sc_drop)+'-rho'+str(rho)))
             for epoch in range(1, self.epochs+1):
                 self.model.train()
