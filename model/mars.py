@@ -26,7 +26,7 @@ from model.metrics import compute_scores
 class MARS:
 
     def __init__(self, n_clusters, params, labeled_data, unlabeled_data, pretrain_data=None,
-                 val_split=0.85, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=[0.2,0.4,0.6,0.8], tau=[0,0.1,0.2,0.3], rho=[0.5,0.8,1]):
+                 val_split=1, hid_dim_1=1000, hid_dim_2=100, p_drop=0.0, p_sc_drop=[0.2,0.4,0.6,0.8], tau=[0.2], rho=[0.5,0.8,1]): #[0,0.1,0.2,0.3]
         """Initialization of MARS.
         n_clusters: number of clusters in the unlabeled meta-dataset
         params: parameters of the MARS model
@@ -170,6 +170,9 @@ class MARS:
                     best_model = copy.deepcopy(self.model) # best epoch is last
                     torch.save(self.model.state_dict(), os.path.join(self.experiment_dir,'model-{}-novalset-finalepoch-tau{}-p_sc{}-rho{}.pt'.format(self.unlabeled_metadata, tau, p_sc_drop, rho)))
                     
+                writer.add_scalar('Loss/train', loss_tr, epoch)
+                writer.add_scalar('Accuracy/train', acc_tr, epoch)
+                
                 if self.val_loader is None:
                     continue
                 self.model.eval()
@@ -187,9 +190,7 @@ class MARS:
                         best_rho = rho
                         best_model = copy.deepcopy(self.model)
                 lr_scheduler.step()
-                writer.add_scalar('Loss/train', loss_tr, epoch)
                 writer.add_scalar('Loss/val', loss_val, epoch)
-                writer.add_scalar('Accuracy/train', acc_tr, epoch)
                 writer.add_scalar('Accuracy/val', acc_val, epoch)
 
         self.model = copy.deepcopy(best_model)
